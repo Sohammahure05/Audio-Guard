@@ -93,19 +93,66 @@ def r2_series(base_profile, profiles):
     return values
 
 
+def _ylim_top(values):
+    return float(min(100, max(40, np.ceil(max(values) / 10) * 10 + 10)))
+
+
 def plot_r2_trend(ax, prev_pct, new_pct):
     past = list(prev_pct)
     x_new = len(past) + 1
-    if past:
-        ax.plot(range(1, len(past) + 1), past, marker="o", color="#1565c0", label="saved readings")
-        ax.plot([len(past), x_new], [past[-1], new_pct], color="#1565c0", linestyle=":")
+    xs = list(range(0, len(past) + 1))
+    ys = [0.0] + past
+    ax.plot(xs, ys, marker="o", color="#1565c0", label="ideal and saved readings")
+    ax.plot([xs[-1], x_new], [ys[-1], new_pct], color="#1565c0", linestyle=":")
     ax.scatter([x_new], [new_pct], marker="*", s=180, color="#c62828", zorder=5, label="this reading")
     ax.axhline(100 * (1 - R2_HEALTHY), color="orange", linestyle="--", label="watch limit")
     ax.axhline(100 * (1 - R2_WATCH), color="red", linestyle="--", label="degraded limit")
     ax.set_title(f"Degradation vs ideal (R2): {new_pct:.0f}% ({pct_condition(new_pct)})")
     ax.set_xlabel("Reading number since the ideal was set")
     ax.set_ylabel("Degradation %")
-    ax.set_xlim(0.5, x_new + 0.5)
-    ax.set_ylim(0, 100)
-    ax.set_xticks(range(1, x_new + 1))
+    ax.set_xlim(-0.5, x_new + 0.5)
+    ax.set_ylim(0, _ylim_top(ys + [new_pct]))
+    ax.set_xticks(range(0, x_new + 1))
+    ax.set_xticklabels(["ideal"] + [str(i) for i in range(1, x_new + 1)])
     ax.legend(fontsize=8, loc="upper left")
+
+
+def plot_history_degradation(ax, pcts):
+    values = list(pcts)
+    xs = list(range(0, len(values) + 1))
+    ys = [0.0] + values
+    ax.plot(xs, ys, marker="o", color="#1565c0")
+    ax.axhline(100 * (1 - R2_HEALTHY), color="orange", linestyle="--", label="watch limit")
+    ax.axhline(100 * (1 - R2_WATCH), color="red", linestyle="--", label="degraded limit")
+    ax.set_title("Degradation vs the machine's ideal (R2), saved readings")
+    ax.set_xlabel("Reading number since the ideal was set")
+    ax.set_ylabel("Degradation %")
+    ax.set_xlim(-0.5, len(values) + 0.5)
+    ax.set_ylim(0, _ylim_top(ys))
+    ax.set_xticks(xs)
+    ax.set_xticklabels(["ideal"] + [str(i) for i in range(1, len(values) + 1)])
+    ax.legend(fontsize=8, loc="upper left")
+
+
+def trend_info(pcts):
+    if len(pcts) < 3:
+        return {"direction": "Not enough readings"}
+    slope = float(np.polyfit(range(len(pcts)), pcts, 1)[0])
+    if slope > 2:
+        return {"direction": "Worsening"}
+    if slope < -2:
+        return {"direction": "Improving"}
+    return {"direction": "Stable"}
+
+
+def degradation_alerts(prev_pct, new_pct):
+    series = list(prev_pct) + [new_pct]
+    alerts = []
+    condition = pct_condition(new_pct)
+    if condition == "Degraded":
+        alerts.append(f"This reading is degraded: {new_pct:.0f}% away from the machine's ideal.")
+    elif condition == "Watch":
+        alerts.append(f"This reading is on watch: {new_pct:.0f}% away from the machine's ideal.")
+    if len(series) >= 3 and series[-1] > series[-2] > series[-3] and series[-1] - series[-3] >= 5:
+        alerts.append(f"Degradation has risen over the last 3 readings: {series[-3]:.0f}% to {series[-1]:.0f}%.")
+    return alerts

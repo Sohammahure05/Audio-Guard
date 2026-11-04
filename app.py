@@ -1,19 +1,17 @@
 import hashlib
 import io
+import re
 from datetime import datetime
 
 import joblib
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
-import re
-import numpy as np
-import degradation
-from config import CHANNELS, MODEL_PATH, SAVE_UPLOADS, SR, SUBF_SR
-
 import analytics
 import auth
+import degradation
 import storage
 from audio import read_audio, read_table
 from config import CHANNELS, MODEL_PATH, SAVE_UPLOADS, SR, SUBF_SR
@@ -111,6 +109,22 @@ def read_upload(upload, rate):
         return [read_table(source, rate)]
     return read_audio(source, CHANNELS)
 
+def plot_degradation(ax, saved_pct, now_pct):
+    n = len(saved_pct)
+    xs = [0] + list(range(1, n + 1))
+    ys = [0.0] + [float(v) for v in saved_pct]
+    ax.plot(xs, ys, marker="o", color="#1565c0", label="ideal and saved readings")
+    ax.plot([xs[-1], n + 1], [ys[-1], now_pct], color="#1565c0", linestyle=":")
+    ax.scatter([n + 1], [now_pct], marker="*", s=250, color="#c62828", zorder=5, label="this reading")
+    ax.axhline(8, color="orange", linestyle="--", label="watch limit")
+    ax.axhline(12, color="red", linestyle="--", label="degraded limit")
+    ax.set_ylim(0, max(20, now_pct * 1.2, max(ys) * 1.2))
+    ax.set_xticks(range(0, n + 2))
+    ax.set_xticklabels(["ideal"] + [str(i) for i in range(1, n + 1)] + ["now"])
+    ax.set_xlabel("Reading number since the ideal was set")
+    ax.set_ylabel("Degradation %")
+    ax.set_title(f"Degradation vs ideal (R2): {now_pct:.0f}%")
+    ax.legend(fontsize=8, loc="upper left")
 
 def analysis_section(user, machine, bundle):
     entry = bundle["machines"][machine["type"]]
@@ -136,12 +150,14 @@ def analysis_section(user, machine, bundle):
     signals, result = current["signals"], current["result"]
     signal = signals[0]
 
+    base = storage.get_baseline(user["id"], int(machine["id"]), model_id)
     prev = storage.readings(user["id"], int(machine["id"]), model_id)
-    ideal_now = storage.get_baseline(user["id"], int(machine["id"]), model_id)
-    if ideal_now is not None:
-        prev = prev[prev["recorded_at"] >= pd.Timestamp(ideal_now["created"])].reset_index(drop=True)
+    if base is not None:
+        prev = prev[prev["recorded_at"] >= pd.Timestamp(base["created"])].reset_index(drop=True)
+    since_ideal = prev
+
     trend_info = analytics.trend(list(prev["health"]) + [result["health"]])
-    comparison = analytics.compare(result, prev, ideal_now["profile"] if ideal_now is not None else None)
+    comparison = analytics.compare(result, prev, base["profile"] if base is not None else None)
     alert_list = analytics.alerts(prev, trend_info, comparison)
 
     banner = f"{result['status']}: {result['level']}"
@@ -175,8 +191,6 @@ def analysis_section(user, machine, bundle):
     plt.close(fig)
 
     st.markdown("**Comparison with this machine's ideal and history**")
-    base = storage.get_baseline(user["id"], int(machine["id"]), model_id)
-    since_ideal = prev[prev["recorded_at"] >= pd.Timestamp(base["created"])] if base is not None else prev
     if base is None:
         st.info("No ideal sound stored for this machine. Record healthy clips in the batch section "
                 "(choose 'Healthy reference') to measure degradation.")
@@ -198,16 +212,15 @@ def analysis_section(user, machine, bundle):
         left, right = st.columns(2)
         fig, ax = plt.subplots(figsize=(8, 3.4))
         prev_pct = degradation.r2_series(base["profile"], since_ideal["profile"]) if len(since_ideal) else []
-        degradation.plot_r2_trend(ax, prev_pct, r2_pct if r2_pct is not None else 0.0)
+        plot_degradation(ax, list(prev_pct), r2_pct if r2_pct is not None else 0.0)
         fig.tight_layout()
         left.pyplot(fig)
         plt.close(fig)
-        if comparison is not None:
-            fig, ax = plt.subplots(figsize=(8, 3.4))
-            plot_profile(ax, result, {"baseline_profile": base["profile"]})
-            fig.tight_layout()
-            right.pyplot(fig)
-            plt.close(fig)
+        fig, ax = plt.subplots(figsize=(8, 3.4))
+        plot_profile(ax, result, {"baseline_profile": base["profile"]})
+        fig.tight_layout()
+        right.pyplot(fig)
+        plt.close(fig)
         times = (prev["recorded_at"] - prev["recorded_at"].iloc[0]).dt.total_seconds() / 86400 if len(prev) else []
         eta = degradation.days_to_boundary(times, list(prev["health"])) if len(prev) else None
         if eta is not None:
@@ -219,12 +232,12 @@ def analysis_section(user, machine, bundle):
             f"Trend: {trend_info['direction'].lower()}. Largest spectral changes: "
             + "; ".join(analytics.describe_changes(comparison)) + "."
         )
-        st.dataframe(pd.DataFrame({
-            "Segment start (s)": result["segment_times"],
-            "Abnormal probability": result["segment_scores"].round(3),
-            "Flagged": result["segment_flags"],
-        }), hide_index=True)
-        st.dataframe([{"Check": n, "Passed": ok, "Detail": d} for n, ok, d in result["checks"]], hide_index=True)
+    st.dataframe(pd.DataFrame({
+        "Segment start (s)": result["segment_times"],
+        "Abnormal probability": result["segment_scores"].round(3),
+        "Flagged": result["segment_flags"],
+    }), hide_index=True)
+    st.dataframe([{"Check": n, "Passed": ok, "Detail": d} for n, ok, d in result["checks"]], hide_index=True)
 
     saved = st.session_state.setdefault("saved", set())
     if key in saved:
@@ -235,14 +248,13 @@ def analysis_section(user, machine, bundle):
         saved.add(key)
         flash("Reading saved to history.")
         st.rerun()
-        
-    base_ideal = storage.get_baseline(user["id"], int(machine["id"]), model_id)
-    if base_ideal is None:
+
+    if base is None:
         st.info("No ideal set yet for this machine.")
     else:
         st.info(
-            f"Ideal: health {base_ideal['health']:.0f} "
-            f"on {base_ideal['created']} ({base_ideal['clips']} reference clip(s))"
+            f"Ideal: health {base['health']:.0f} "
+            f"on {base['created']} ({base['clips']} reference clip(s))"
         )
     if result["status"] == "Normal":
         if st.button("Set this recording as ideal"):
@@ -250,8 +262,7 @@ def analysis_section(user, machine, bundle):
             flash(f"Ideal set for machine {machine['code']}.")
             st.rerun()
     else:
-        st.caption("Ideal should be a healthy recording — this one is Abnormal, so it cannot be set as ideal.")
-
+        st.caption("Ideal should be a healthy recording. This one is Abnormal, so it cannot be set as ideal.")
 
     meta = {"code": machine["code"], "name": machine["name"], "type": machine["type"],
             "location": machine["location"], "file": upload.name,
@@ -272,9 +283,8 @@ def analysis_section(user, machine, bundle):
         }
     pdf = build_pdf(result, signal, meta, load_reference(machine["type"]), history, ideal_info)
     st.download_button("Download report (PDF)", pdf,
-                    file_name=f"report_{machine['code']}_{upload.name.rsplit('.', 1)[0]}.pdf",
+                       file_name=f"report_{machine['code']}_{upload.name.rsplit('.', 1)[0]}.pdf",
                        mime="application/pdf")
-    
 
 
 def history_section(user, machine, bundle):
@@ -294,18 +304,27 @@ def history_section(user, machine, bundle):
     })
     st.dataframe(table, hide_index=True)
     shown = history[history["model_id"] == current]
-    if len(shown) >= 2:
+    ideal = storage.get_baseline(user["id"], int(machine["id"]), current)
+    only_since = False
+    if ideal is not None:
+        only_since = st.checkbox("Show only readings since the ideal was set", value=True,
+                                 key=f"since_{machine['id']}")
+        if only_since:
+            shown = shown[shown["recorded_at"] >= pd.Timestamp(ideal["created"])]
+    if len(shown) >= 1:
         fig, ax = plt.subplots(figsize=(10, 3))
         ax.plot(range(1, len(shown) + 1), shown["health"], marker="o", color="#1565c0")
         ax.axhline(50, color="black", linestyle="--", linewidth=1)
         ax.set_ylim(0, 105)
         ax.set_xticks(range(1, len(shown) + 1))
-        ax.set_xlabel("Reading number")
+        ax.set_xlabel("Reading number" + (" since the ideal was set" if only_since else ""))
         ax.set_ylabel("Health index")
         ax.set_title("Health index of saved readings (current model)")
         fig.tight_layout()
         st.pyplot(fig)
         plt.close(fig)
+    elif ideal is not None and only_since:
+        st.caption("Fewer than 2 readings have been saved since the ideal was set.")
     if (history["model_id"] != current).any():
         st.caption("Readings marked older were made with a previous model and are left out of comparisons.")
     left, right = st.columns(2)
@@ -317,6 +336,7 @@ def history_section(user, machine, bundle):
             storage.delete_reading(user["id"], int(target))
             flash(f"Reading {target} deleted.")
             st.rerun()
+
 
 MAX_BATCH = 10
 
@@ -437,6 +457,7 @@ def batch_baseline_view(user, machines, batch, model_id):
                                  profile, len(results), model_id)
         flash("Baselines saved.")
         st.rerun()
+
 
 def main():
     user = st.session_state.get("user")
