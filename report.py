@@ -21,8 +21,11 @@ COLORS = {
     "Critical": "#7f0000",
 }
 
+DRIFT_NOTE = ("Sound drift compares spectral shape with this machine's ideal. It can differ from the "
+              "fault verdict, for example when the recording comes from a different machine, microphone or noise level.")
+
 NOTES = [
-    "Health index: 50 is the decision boundary learned on unseen machines. Values above 50 "
+    "Health index: 50 is the decision boundary tuned on validation recordings. Values above 50 "
     "indicate normal operation and values below 50 indicate abnormal operation.",
     "Abnormality timeline: each bar is a 2 second segment. Red bars are segments flagged as "
     "abnormal and the dashed line is the decision threshold.",
@@ -31,7 +34,8 @@ NOTES = [
     "Input checks: the recording is compared with the training recordings. A failed check "
     "means the microphone, machine or noise level may differ from the training data, so the "
     "verdict should be confirmed by inspection.",
-    "Baseline comparison: spectral shape is compared with this machine's own earlier readings. "
+    "Two references are used. The machine ideal is built from healthy clips you chose and drives the "
+    "sound drift figure. The history comparison uses the average of earlier saved readings. "
     "Segments are loudness-normalised, so differences show a change in sound character, not volume.",
     "This report supports maintenance planning. It does not replace a physical inspection.",
 ]
@@ -77,13 +81,13 @@ def plot_trend(ax, prev, result):
     ax.legend(loc="lower left")
 
 
-def plot_profile(ax, result, comparison):
-    ax.plot(analytics.CENTERS, comparison["baseline_profile"], color="#1565c0", label="machine ideal")
+def plot_profile(ax, result, comparison, label="machine ideal"):
+    ax.plot(analytics.CENTERS, comparison["baseline_profile"], color="#1565c0", label=label)
     ax.plot(analytics.CENTERS, result["profile"], color="#c62828", label="this reading")
     ax.set_xscale("symlog", linthresh=500)
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel("Level (dB, normalised)")
-    ax.set_title("Spectral profile: this reading vs baseline")
+    ax.set_title("Spectral profile: this reading vs reference")
     ax.legend()
 
 
@@ -94,6 +98,7 @@ def load_reference(machine):
     rows = [r for r in data.get("results", []) if r["machine"] == machine]
     for r in rows:
         r["independent"] = data.get("setup", {}).get("independent", False)
+        r["protocol"] = data.get("setup", {}).get("protocol", "machine")
     return rows
 
 
@@ -127,8 +132,9 @@ def summary_page(result, meta, ideal=None):
     fig.text(0.40, 0.832, f"Health index {result['health']:.0f} / 100", fontsize=11)
     if ideal is not None and ideal["r2"] is not None:
         fig.text(0.40, 0.812,
-                 f"Degradation vs machine ideal: {ideal['r2_pct']:.0f}% (R2 {ideal['r2']:.3f}), {ideal['condition']}",
-                 fontsize=10, color=color)
+                 f"Sound drift from ideal: {ideal['r2_pct']:.0f}% (R2 {ideal['r2']:.3f}), {ideal['condition']}",
+                 fontsize=10, color="#444444")
+        fig.text(0.40, 0.795, textwrap.fill(DRIFT_NOTE, 62), fontsize=7.5, color="#666666", va="top")
 
     ax = fig.add_axes([0.08, 0.46, 0.84, 0.32])
     ax.axis("off")
@@ -163,7 +169,8 @@ def detail_page(result, signal, reference):
         rows = []
         for r in reference:
             auc = "n/a" if r["auc"] is None else f"{r['auc']:.3f}"
-            kind = "unseen machine" if r["independent"] else "all machines (not independent)"
+            kind = ("unseen recordings" if r.get("protocol") == "file" else
+                    "unseen machine" if r["independent"] else "all machines (not independent)")
             rows.append(f"{r['snr']} dB, {kind}: accuracy {r['accuracy']:.1%}, recall {r['recall']:.1%}, "
                         f"AUC {auc} ({r['files']} files)")
         text = "\n".join(rows)
@@ -185,10 +192,12 @@ def history_page(result, history):
                           f"Trend: {trend_info['direction']}.", fontsize=10, color="#444444")
     plot_trend(fig.add_axes([0.10, 0.68, 0.82, 0.19]), prev, result)
     if comparison is not None:
-        plot_profile(fig.add_axes([0.10, 0.42, 0.82, 0.19]), result, comparison)
+        plot_profile(fig.add_axes([0.10, 0.42, 0.82, 0.19]), result, comparison,
+                     label="average of earlier readings")
         changes = analytics.describe_changes(comparison)
-        text = [f"Compared with {comparison['readings_used']} earlier normal reading(s): health index "
-                f"{comparison['health_change']:+.0f} points against the baseline ({comparison['baseline_health']:.0f})."]
+        text = [f"Compared with the average of {comparison['readings_used']} earlier reading(s) "
+                f"(average health {comparison['baseline_health']:.0f}): health index "
+                f"{comparison['health_change']:+.0f} points. This is separate from the machine ideal on the next page."]
         text += ["Largest spectral changes: " + "; ".join(changes) + "."] if changes else []
         fig.text(0.08, 0.37, textwrap.fill(" ".join(text), 100), fontsize=9.5, va="top")
     fig.text(0.08, 0.28, "Alerts from history", fontsize=12, weight="bold")
@@ -205,7 +214,7 @@ def history_page(result, history):
 
 def degradation_page(result, ideal):
     fig = plt.figure(figsize=PAGE)
-    fig.text(0.08, 0.95, "Degradation against this machine's ideal", fontsize=18, weight="bold")
+    fig.text(0.08, 0.95, "Sound drift from this machine's ideal", fontsize=18, weight="bold")
     fig.text(0.08, 0.925,
              f"Ideal built from {ideal['clips']} healthy clip(s), saved {ideal['created']}.",
              fontsize=10, color="#444444")
@@ -216,7 +225,7 @@ def degradation_page(result, ideal):
         ["Ideal health", f"{ideal['health']:.0f} / 100"],
         ["Health now", f"{result['health']:.0f} / 100"],
         ["R2 against ideal", r2],
-        ["R2 degradation", r2_pct],
+        ["Sound drift (1 - R2)", r2_pct],
         ["Spectral shift", shift],
         ["Condition", ideal["condition"]],
     ]
@@ -236,8 +245,9 @@ def degradation_page(result, ideal):
                             ideal["r2_pct"] if ideal["r2_pct"] is not None else 0.0)
     note = ("R2 compares the spectral shape of this reading with the machine's own ideal. "
             "1.000 means identical shape. Lower values mean the sound has changed. "
-            "Degradation is (1 - R2) as a percentage. Condition: Healthy at R2 0.92 or above, "
-            "Watch from 0.88, Degraded below 0.88. These limits are provisional.")
+            "Sound drift is (1 - R2) as a percentage. Condition: Healthy at R2 0.92 or above, "
+            "Watch from 0.88, Degraded below 0.88. These limits are provisional guesses, not measured values. "
+            + DRIFT_NOTE)
     fig.text(0.08, 0.28, textwrap.fill(note, 100), fontsize=9, va="top")
     return fig
 

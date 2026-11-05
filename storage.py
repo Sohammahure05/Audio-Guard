@@ -269,3 +269,50 @@ def get_baseline(owner_id, machine_id, model_id):
     base = dict(row)
     base["profile"] = json.loads(base["profile"])
     return base
+
+def update_machine(owner_id, machine_id, code, name, mtype, location, notes):
+    try:
+        with session() as conn:
+            cur = conn.execute(
+                "UPDATE machines SET code = ?, name = ?, type = ?, location = ?, notes = ? "
+                "WHERE id = ? AND owner_id = ?",
+                (code, name, mtype, location, notes, machine_id, owner_id),
+            )
+        return cur.rowcount > 0
+    except sqlite3.IntegrityError:
+        return False
+
+
+def get_machine(owner_id, machine_id):
+    with session() as conn:
+        row = conn.execute(
+            "SELECT id, code, name, type, location, notes, created FROM machines "
+            "WHERE id = ? AND owner_id = ?", (machine_id, owner_id)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_baseline(owner_id, machine_id):
+    with session() as conn:
+        conn.execute(
+            "DELETE FROM baselines WHERE machine_id = ? AND machine_id IN "
+            "(SELECT id FROM machines WHERE owner_id = ?)", (machine_id, owner_id))
+
+
+def get_reading(owner_id, reading_id):
+    with session() as conn:
+        row = conn.execute(
+            "SELECT r.*, m.code AS machine_code, m.name AS machine_name, m.type AS machine_type, "
+            "m.location AS machine_location FROM readings r JOIN machines m ON m.id = r.machine_id "
+            "WHERE r.id = ? AND m.owner_id = ?", (reading_id, owner_id)).fetchone()
+    return dict(row) if row else None
+
+
+def recent_readings(owner_id, limit=200):
+    with session() as conn:
+        frame = pd.read_sql_query(
+            "SELECT r.id, r.machine_id, r.recorded_at, r.file_name, r.status, r.level, r.score, "
+            "r.health, r.flag_ratio, r.reliable, r.model_id, m.code AS machine_code, "
+            "m.name AS machine_name FROM readings r JOIN machines m ON m.id = r.machine_id "
+            "WHERE m.owner_id = ? ORDER BY r.recorded_at DESC, r.id DESC LIMIT ?",
+            conn, params=(owner_id, limit))
+    return frame

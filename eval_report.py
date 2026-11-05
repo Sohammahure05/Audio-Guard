@@ -53,14 +53,17 @@ def table_rows(rows):
 def summary_page(machine, setup, rows):
     fig = plt.figure(figsize=PAGE)
     fig.text(0.08, 0.95, f"Model evaluation: {machine}", fontsize=20, weight="bold")
-    note = ("Test machines were never used in training or calibration."
+    note = ("Test recordings were never used in training or calibration. The same physical machines "
+            "appear in training with different recordings."
+            if setup.get("protocol") == "file" else
+            "Test machines were never used in training or calibration."
             if setup["independent"] else
             "WARNING: the model was trained on all machine IDs, so these results are not independent.")
     fig.text(0.08, 0.92, f"Trained {setup['trained_at']}  |  training IDs {', '.join(setup['train_ids'])}  |  "
                          f"test IDs {', '.join(setup['test_ids'])}", fontsize=9, color="#444444")
     fig.text(0.08, 0.90, note, fontsize=9, color="#c62828" if not setup["independent"] else "#2e7d32")
     fig.text(0.08, 0.875, f"Decision threshold {setup['threshold']:.3f}  |  segment pooling: {setup['pooling']}  |  "
-                          f"calibration AUC on unseen machines: {setup['calibration_auc']}", fontsize=9)
+                          f"validation AUC: {setup['calibration_auc']}", fontsize=9)
     ax = fig.add_axes([0.06, 0.70, 0.88, 0.15])
     ax.axis("off")
     table = ax.table(cellText=table_rows(rows),

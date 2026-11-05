@@ -8,9 +8,11 @@ from sklearn.metrics import precision_recall_curve
 
 import cache
 from config import (HOLDOUT_IDS, MODEL_DIR, MODEL_PATH, NOVELTY_PERCENTILE, OOD_MARGIN,
-                    OOD_PERCENTILE, POOLING_MODES, SEED, TRAIN_SNR)
+                    OOD_PERCENTILE, POOLING_MODES, SEED, SPLIT_FRACTIONS, SPLIT_MODE, SPLIT_STRATEGY,
+                    TEST_SNRS, TRAIN_SNR, TRAIN_SNRS)
 from inference import ood_scores, safe_auc, summarize
 from models import fit_models, predict_parts, segment_table, unit_info, unit_mean, unit_scores
+from split import file_splits
 
 
 def best_threshold(y, score):
@@ -52,48 +54,85 @@ def out_of_group(X, meta, y, mu, sd):
     )
 
 
+def calibrate(table, info, novelty, distance):
+    auc_by_mode = {}
+    for mode in POOLING_MODES:
+        scores = unit_scores(table, mode)
+        auc_by_mode[mode] = safe_auc(info.loc[scores.index, "label"].to_numpy(), scores.to_numpy())
+    pooling = max(auc_by_mode, key=lambda m: auc_by_mode[m] if auc_by_mode[m] is not None else -1)
+    scores = unit_scores(table, pooling)
+    y_unit = info.loc[scores.index, "label"].to_numpy()
+    threshold = best_threshold(y_unit, scores.to_numpy())
+    normal_units = info.index[info["label"] == 0]
+    novelty_limit = float(np.percentile(novelty.loc[normal_units], NOVELTY_PERCENTILE))
+    ood_limit = float(np.percentile(distance, OOD_PERCENTILE) * OOD_MARGIN)
+    summary = summarize(y_unit, scores.to_numpy(), threshold)
+    summary["auc_by_pooling"] = auc_by_mode
+    return pooling, threshold, novelty_limit, ood_limit, summary
+
+
+def fit_by_machine(X, meta, y):
+    mu, sd = X.mean(axis=0), X.std(axis=0) + 1e-6
+    table, info, novelty, distance = out_of_group(X, meta, y, mu, sd)
+    result = calibrate(table, info, novelty, distance)
+    print("  fitting final models")
+    return fit_models(X, y), mu, sd, result
+
+
+def fit_by_file(X, meta, y):
+    split = meta["split"].to_numpy()
+    snr_ok = meta["snr"].isin(TRAIN_SNRS).to_numpy()
+    train = (split == "train") & snr_ok
+    val = (split == "val") & (meta["variant"] == "clean").to_numpy()
+    if not train.any() or not val.any():
+        raise SystemExit("File split left no training or validation recordings.")
+    print(f"  training segments {int(train.sum())}, validation segments {int(val.sum())} "
+          f"(train SNR {TRAIN_SNRS}, validation SNR {sorted(meta.loc[val, 'snr'].unique().tolist())})")
+    mu, sd = X[train].mean(axis=0), X[train].std(axis=0) + 1e-6
+    models = fit_models(X[train], y[train])
+    parts = predict_parts(models, X[val])
+    val_meta = meta[val]
+    table = segment_table(val_meta, parts["ensemble"])
+    info = unit_info(val_meta)
+    novelty = unit_mean(val_meta, parts["novelty"])
+    distance = unit_mean(val_meta, ood_scores(X[val], mu, sd))
+    return models, mu, sd, calibrate(table, info, novelty, distance)
+
+
 def main(all_ids):
     loaded = cache.ensure()
     if loaded is None:
         raise SystemExit("No MIMII wav files found. Check MIMII_ROOT in config.py")
-    X_all, meta_all, _ = loaded
-    keep = (meta_all["source"] == "mimii") & (meta_all["snr"] == TRAIN_SNR)
-    if not all_ids:
-        keep &= ~meta_all["mid"].isin(HOLDOUT_IDS)
+    X_all, meta_all, paths = loaded
+    by_file = SPLIT_MODE == "file"
+    meta_all["split"] = file_splits(meta_all, paths)
+    keep = (meta_all["source"] == "mimii").to_numpy().copy()
+    if by_file:
+        keep &= meta_all["split"].isin(["train", "val"]).to_numpy()
+        keep &= (meta_all["snr"].isin(set(TRAIN_SNRS) | set(TEST_SNRS) | {TRAIN_SNR})).to_numpy()
+    else:
+        keep &= (meta_all["snr"] == TRAIN_SNR).to_numpy()
+        if not all_ids:
+            keep &= (~meta_all["mid"].isin(HOLDOUT_IDS)).to_numpy()
     if not keep.any():
-        raise SystemExit(f"No {TRAIN_SNR} dB recordings available for training")
+        raise SystemExit("No MIMII recordings available for training")
 
-    machines, holdout = {}, [] if all_ids else list(HOLDOUT_IDS)
+    machines = {}
+    holdout = [] if (by_file or all_ids) else list(HOLDOUT_IDS)
     for machine in sorted(meta_all.loc[keep, "machine"].unique()):
-        mask = (keep & (meta_all["machine"] == machine)).to_numpy()
+        mask = keep & (meta_all["machine"] == machine).to_numpy()
         X, meta = X_all[mask], meta_all[mask].reset_index(drop=True)
         y = meta["label"].to_numpy()
         train_ids = sorted(meta["mid"].unique())
-        print(f"\n{machine}: {meta['unit'].nunique()} training units from {train_ids}")
-
-        mu, sd = X.mean(axis=0), X.std(axis=0) + 1e-6
-        table, info, novelty, distance = out_of_group(X, meta, y, mu, sd)
-
-        auc_by_mode = {}
-        for mode in POOLING_MODES:
-            scores = unit_scores(table, mode)
-            auc_by_mode[mode] = safe_auc(info.loc[scores.index, "label"].to_numpy(), scores.to_numpy())
-        pooling = max(auc_by_mode, key=lambda m: auc_by_mode[m] if auc_by_mode[m] is not None else -1)
-        scores = unit_scores(table, pooling)
-        y_unit = info.loc[scores.index, "label"].to_numpy()
-        threshold = best_threshold(y_unit, scores.to_numpy())
-
-        normal_units = info.index[info["label"] == 0]
-        novelty_limit = float(np.percentile(novelty.loc[normal_units], NOVELTY_PERCENTILE))
-        ood_limit = float(np.percentile(distance, OOD_PERCENTILE) * OOD_MARGIN)
-        calibration = summarize(y_unit, scores.to_numpy(), threshold)
-        calibration["auc_by_pooling"] = auc_by_mode
+        print(f"\n{machine}: split mode '{SPLIT_MODE}' ({SPLIT_STRATEGY}), machine IDs {train_ids}")
+        models, mu, sd, result = (fit_by_file if by_file else fit_by_machine)(X, meta, y)
+        pooling, threshold, novelty_limit, ood_limit, calibration = result
+        label = "validation" if by_file else "unseen-machine"
         print(f"  pooling={pooling} threshold={threshold:.3f} "
-              f"unseen-machine AUC={calibration['auc']} recall={calibration['recall']:.3f}")
-
-        print("  fitting final models")
+              f"{label} AUC={calibration['auc']} recall={calibration['recall']:.3f} "
+              f"specificity={calibration['specificity']:.3f}")
         machines[machine] = {
-            "models": fit_models(X, y), "pooling": pooling, "threshold": threshold,
+            "models": models, "pooling": pooling, "threshold": threshold,
             "novelty_limit": novelty_limit, "mu": mu, "sd": sd, "ood_limit": ood_limit,
             "calibration": calibration, "train_ids": train_ids,
         }
@@ -102,7 +141,8 @@ def main(all_ids):
     joblib.dump({
         "machines": machines,
         "info": {"holdout_ids": holdout, "trained_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                 "train_snr": TRAIN_SNR},
+                 "train_snr": TRAIN_SNR, "train_snrs": list(TRAIN_SNRS),
+                 "split_mode": SPLIT_MODE, "split_strategy": SPLIT_STRATEGY, "split_fractions": list(SPLIT_FRACTIONS)},
     }, MODEL_PATH)
     print("\nSaved", MODEL_PATH)
 

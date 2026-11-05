@@ -19,15 +19,22 @@ def trend(health):
     return {"direction": direction, "slope": slope, "change": float(change), "points": int(n)}
 
 
-def compare(result, prev, ideal_profile=None):
-    if prev.empty:
+def compare(result, prev, ideal_profile=None, ideal_health=None):
+    if prev.empty and ideal_profile is None:
         return None
-    normal = prev[prev["status"] == "Normal"]
-    base = normal if len(normal) >= 2 else prev
-    if ideal_profile is not None:
+    if prev.empty:
         baseline = np.asarray(ideal_profile, dtype=float)
+        baseline_health = float(ideal_health if ideal_health is not None else result["health"])
+        used = 0
     else:
-        baseline = np.median(np.stack(base["profile"].to_list()), axis=0)
+        normal = prev[prev["status"] == "Normal"]
+        base = normal if len(normal) >= 2 else prev
+        if ideal_profile is not None:
+            baseline = np.asarray(ideal_profile, dtype=float)
+        else:
+            baseline = np.median(np.stack(base["profile"].to_list()), axis=0)
+        baseline_health = float(base["health"].median())
+        used = int(len(base))
     delta = np.asarray(result["profile"]) - baseline
     changes = []
     for band in np.array_split(np.arange(N_MELS), 8):
@@ -35,12 +42,11 @@ def compare(result, prev, ideal_profile=None):
         high = EDGES[min(band[-1] + 2, len(EDGES) - 1)]
         changes.append((float(delta[band].mean()), float(low), float(high)))
     changes.sort(key=lambda c: -abs(c[0]))
-    baseline_health = float(base["health"].median())
     return {
         "baseline_profile": baseline,
         "baseline_health": baseline_health,
         "health_change": float(result["health"] - baseline_health),
-        "readings_used": int(len(base)),
+        "readings_used": used,
         "top_changes": changes[:3],
     }
 

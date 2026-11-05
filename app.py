@@ -19,7 +19,7 @@ from inference import analyse
 from report import (build_pdf, load_reference, plot_profile, plot_spectrogram, plot_timeline,
                     plot_trend, plot_waveform)
 
-st.set_page_config(page_title="Machine Health Monitor", layout="wide")
+st.set_page_config(page_title="Audio Guard", layout="wide")
 storage.init()
 
 
@@ -33,7 +33,7 @@ def flash(message):
 
 
 def login_screen():
-    st.title("Machine Health Monitor")
+    st.title("Audio Guard")
     st.caption("Log in as a manufacturer owner to manage machines and keep a reading history.")
     left, right = st.columns(2)
     with left:
@@ -157,7 +157,8 @@ def analysis_section(user, machine, bundle):
     since_ideal = prev
 
     trend_info = analytics.trend(list(prev["health"]) + [result["health"]])
-    comparison = analytics.compare(result, prev, base["profile"] if base is not None else None)
+    comparison = analytics.compare(result, prev, base["profile"] if base is not None else None,
+                                   base["health"] if base is not None else None)
     alert_list = analytics.alerts(prev, trend_info, comparison)
 
     banner = f"{result['status']}: {result['level']}"
@@ -472,7 +473,7 @@ def main():
         if st.button("Log out"):
             st.session_state.clear()
             st.rerun()
-    st.title("Machine Health Monitor")
+    st.title("Audio Guard")
     if not MODEL_PATH.exists():
         st.error("Model not found. Run train.py first.")
         return
