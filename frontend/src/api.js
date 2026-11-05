@@ -46,6 +46,10 @@ export const analyseApi = {
     return request(`/machines/${machineId}/analyse`, { method: "POST", body });
   },
   save: (key) => request(`/analyses/${key}/save`, { method: "POST" }),
+  async audio(key) {
+    const res = await raw(`/analyses/${key}/audio.wav`);
+    return URL.createObjectURL(await res.blob());
+  },
   async pdf(key) {
     const res = await raw(`/analyses/${key}/report.pdf`);
     const cd = res.headers.get("Content-Disposition") || "";

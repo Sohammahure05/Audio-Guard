@@ -107,6 +107,7 @@ def context(owner_id, machine_id, result, model_id):
             "baseline_profile": [round(float(v), 2) for v in comparison["baseline_profile"]],
         }
     if base is not None:
+        lim = degradation.limits(base.get("spread"))
         pct = degradation.degradation_pct(base["health"], result["health"])
         shift = degradation.spectral_shift_pct(base["profile"], result["profile"])
         r2 = degradation.r2_value(base["profile"], result["profile"])
@@ -119,15 +120,16 @@ def context(owner_id, machine_id, result, model_id):
                            "profile": [round(float(v), 2) for v in base["profile"]]}
         public["degradation"] = {
             "pct": pct, "grade": degradation.grade(pct), "shift": shift, "r2": r2, "r2_pct": r2_pct,
-            "condition": degradation.r2_condition(r2), "series": series,
+            "condition": degradation.r2_condition(r2, lim), "series": series,
             "series_trend": degradation.trend_info(series + ([r2_pct] if r2_pct is not None else [])),
-            "alerts": degradation.degradation_alerts(series, r2_pct if r2_pct is not None else 0.0),
-            "days_to_boundary": eta,
+            "alerts": degradation.degradation_alerts(series, r2_pct if r2_pct is not None else 0.0, lim),
+            "days_to_boundary": eta, "watch_pct": lim[0], "degraded_pct": lim[1],
+            "natural_spread": max(base["spread"]) if base.get("spread") else None,
         }
         internal["ideal_info"] = {
             "health": base["health"], "clips": base["clips"], "created": base["created"], "r2": r2,
             "r2_pct": r2_pct, "shift": shift, "prev_pct": series,
-            "condition": degradation.r2_condition(r2),
+            "condition": degradation.r2_condition(r2, lim), "limits": lim,
         }
     return public, internal
 

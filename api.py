@@ -1,9 +1,11 @@
+import io
 import json
 import os
 import re
 import secrets
 import time
 import uuid
+import wave
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,7 +23,7 @@ import analytics
 import auth
 import service
 import storage
-from config import (EVAL_PATH, MACHINES, MAX_UPLOAD_MB, MIN_IDEAL_CLIPS, SAVE_UPLOADS, STORAGE_DIR,
+from config import (EVAL_PATH, MACHINES, MAX_UPLOAD_MB, MIN_IDEAL_CLIPS, SAVE_UPLOADS, SR, STORAGE_DIR,
                     SUBF_SR, TOKEN_HOURS, UPLOAD_DIR)
 from inference import analyse
 from report import build_pdf, load_reference
@@ -343,6 +345,22 @@ def analysis_pdf(key: str, user=Depends(current_user)):
                     headers={"Content-Disposition": f'attachment; filename="report_{m["code"]}_{stem}.pdf"'})
 
 
+@app.get("/api/analyses/{key}/audio.wav")
+def analysis_audio(key: str, user=Depends(current_user)):
+    item = get_analysis(user, key)
+    signal = np.asarray(item["signals"][0], dtype=np.float64)
+    peak = float(np.max(np.abs(signal))) if len(signal) else 0.0
+    if peak > 0:
+        signal = signal / peak * 0.9
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(SR)
+        out.writeframes((signal * 32767).astype("<i2").tobytes())
+    return Response(buffer.getvalue(), media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/batch/analyse")
 async def batch_analyse(files: list[UploadFile] = File(...), machine_ids: list[int] = Form(...),
                         user=Depends(current_user)):
@@ -414,8 +432,11 @@ async def build_ideal(machine_id: int, files: list[UploadFile] = File(...), user
                                  "healthy. They cannot be used as its ideal: " + ", ".join(bad))
     profile = np.mean([np.asarray(r["profile"], float) for r in results], axis=0)
     health = float(np.mean([r["health"] for r in results]))
-    storage.set_baseline(user["id"], machine_id, health, profile, len(results), bundle["info"]["trained_at"])
-    return service.clean({"message": "Ideal saved.", "clips": len(results), "health": health,
+    from degradation import r2_degradation_pct
+    arrays = [np.asarray(r["profile"], float) for r in results]
+    spread = [r2_degradation_pct(np.mean(arrays[:i] + arrays[i + 1:], axis=0), arrays[i]) or 0.0 for i in range(len(arrays))]
+    storage.set_baseline(user["id"], machine_id, health, profile, len(results), bundle["info"]["trained_at"], spread=spread)
+    return service.clean({"message": "Ideal saved.", "clips": len(results), "health": health, "natural_spread": max(spread),
                           "clip_health": [{"file_name": n, "health": r["health"]} for n, r in zip(names, results)]})
 
 
@@ -444,7 +465,7 @@ def history(machine_id: int, since_ideal: bool = True, user=Depends(current_user
     shown = frame[frame["model_id"] == current] if current else frame.iloc[0:0]
     if ideal is not None and since_ideal:
         shown = shown[shown["recorded_at"] >= pd.Timestamp(ideal["created"])]
-    from degradation import r2_series
+    from degradation import r2_series, limits as degradation_limits
     series = r2_series(ideal["profile"], shown["profile"]) if ideal is not None and len(shown) else []
     return service.clean({
         "machine": machine, "rows": service.history_rows(frame, current),
@@ -454,6 +475,7 @@ def history(machine_id: int, since_ideal: bool = True, user=Depends(current_user
                    "degradation": series[i] if i < len(series) else None}
                   for i, r in enumerate(shown.itertuples())],
         "ideal": {"health": ideal["health"], "clips": ideal["clips"], "created": ideal["created"]} if ideal else None,
+        "limits": list(degradation_limits(ideal.get("spread"))) if ideal else None,
         "older_readings": int((frame["model_id"] != current).sum()) if len(frame) else 0,
     })
 

@@ -31,9 +31,6 @@ NOTES = [
     "abnormal and the dashed line is the decision threshold.",
     "Novelty score: how unusual the sound is compared with normal machine sound, learned from "
     "normal recordings only. It can warn about a sound the classifier has never seen.",
-    "Input checks: the recording is compared with the training recordings. A failed check "
-    "means the microphone, machine or noise level may differ from the training data, so the "
-    "verdict should be confirmed by inspection.",
     "Two references are used. The machine ideal is built from healthy clips you chose and drives the "
     "sound drift figure. The history comparison uses the average of earlier saved readings. "
     "Segments are loudness-normalised, so differences show a change in sound character, not volume.",
@@ -114,7 +111,6 @@ def summary_rows(result):
         ["Longest abnormal stretch", f"{result['longest_run']:.0f} s"],
         ["Novelty score", novelty + (" unusual" if result["novel"] else "")],
         ["Recording length", f"{result['duration']:.1f} s, {result['channels']} channel(s) used"],
-        ["Input reliability", "Good" if result["reliable"] else "Check inputs"],
     ]
 
 
@@ -160,11 +156,7 @@ def detail_page(result, signal, reference):
     plot_waveform(fig.add_axes([0.10, 0.80, 0.82, 0.13]), signal)
     plot_spectrogram(fig.add_axes([0.10, 0.60, 0.82, 0.14]), signal)
 
-    fig.text(0.08, 0.54, "Input checks", fontsize=12, weight="bold")
-    lines = [f"[{'OK' if ok else 'FAIL'}]  {name}: {detail}" for name, ok, detail in result["checks"]]
-    fig.text(0.08, 0.52, "\n".join(lines), fontsize=9.5, va="top", family="monospace", linespacing=1.6)
-
-    fig.text(0.08, 0.42, "Reference performance of this model", fontsize=12, weight="bold")
+    fig.text(0.08, 0.54, "Reference performance of this model", fontsize=12, weight="bold")
     if reference:
         rows = []
         for r in reference:
@@ -176,11 +168,11 @@ def detail_page(result, signal, reference):
         text = "\n".join(rows)
     else:
         text = "Run evaluate.py to add test results here."
-    fig.text(0.08, 0.40, text, fontsize=9.5, va="top", family="monospace", linespacing=1.6)
+    fig.text(0.08, 0.52, text, fontsize=9.5, va="top", family="monospace", linespacing=1.6)
 
-    fig.text(0.08, 0.31, "How to read this report", fontsize=12, weight="bold")
+    fig.text(0.08, 0.36, "How to read this report", fontsize=12, weight="bold")
     body = "\n\n".join(textwrap.fill(n, 100) for n in NOTES)
-    fig.text(0.08, 0.29, body, fontsize=8.5, va="top", linespacing=1.35)
+    fig.text(0.08, 0.34, body, fontsize=8.5, va="top", linespacing=1.35)
     return fig
 
 
@@ -241,12 +233,15 @@ def degradation_page(result, ideal):
         if row == 0:
             cell.set_facecolor("#eeeeee")
             cell.set_text_props(weight="bold")
+    lim = ideal.get("limits") or degradation.limits()
     degradation.plot_r2_trend(fig.add_axes([0.10, 0.36, 0.82, 0.24]), ideal["prev_pct"],
-                            ideal["r2_pct"] if ideal["r2_pct"] is not None else 0.0)
+                              ideal["r2_pct"] if ideal["r2_pct"] is not None else 0.0, lim)
     note = ("R2 compares the spectral shape of this reading with the machine's own ideal. "
             "1.000 means identical shape. Lower values mean the sound has changed. "
-            "Sound drift is (1 - R2) as a percentage. Condition: Healthy at R2 0.92 or above, "
-            "Watch from 0.88, Degraded below 0.88. These limits are provisional guesses, not measured values. "
+            f"Sound drift is (1 - R2) as a percentage. Condition: Close to ideal up to {lim[0]:.0f}% drift, "
+            f"Drifting up to {lim[1]:.0f}%, Far from ideal above that. The limits are set from how much the "
+            "ideal clips vary among themselves. They are provisional and have not been checked against real failures. "
+            "Drift describes how the sound shape differs from the ideal, not whether the machine is faulty. "
             + DRIFT_NOTE)
     fig.text(0.08, 0.28, textwrap.fill(note, 100), fontsize=9, va="top")
     return fig

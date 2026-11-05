@@ -246,14 +246,17 @@ def fleet(owner_id):
         })
     return pd.DataFrame(rows)
 
-def set_baseline(owner_id, machine_id, health, profile, clips, model_id):
+def set_baseline(owner_id, machine_id, health, profile, clips, model_id, spread=None):
     if not owns(owner_id, machine_id):
         raise PermissionError("Machine does not belong to this account")
     with session() as conn:
+        if "spread" not in [row[1] for row in conn.execute("PRAGMA table_info(baselines)").fetchall()]:
+            conn.execute("ALTER TABLE baselines ADD COLUMN spread TEXT")
         conn.execute(
-            "INSERT OR REPLACE INTO baselines (machine_id, created, health, profile, clips, model_id) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (machine_id, now(), float(health), json.dumps([float(v) for v in profile]), clips, model_id),
+            "INSERT OR REPLACE INTO baselines (machine_id, created, health, profile, clips, model_id, spread) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (machine_id, now(), float(health), json.dumps([float(v) for v in profile]), clips, model_id,
+             json.dumps([float(v) for v in spread]) if spread else None),
         )
 
 
@@ -268,6 +271,7 @@ def get_baseline(owner_id, machine_id, model_id):
         return None
     base = dict(row)
     base["profile"] = json.loads(base["profile"])
+    base["spread"] = json.loads(base["spread"]) if base.get("spread") else None
     return base
 
 def update_machine(owner_id, machine_id, code, name, mtype, location, notes):

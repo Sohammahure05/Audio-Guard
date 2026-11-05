@@ -64,6 +64,31 @@ export default function Analyse() {
   );
 }
 
+function Listen({ id }) {
+  const [url, setUrl] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let made = null;
+    let live = true;
+    setUrl(null); setError("");
+    analyseApi.audio(id)
+      .then((u) => { made = u; if (live) setUrl(u); else URL.revokeObjectURL(u); })
+      .catch((err) => live && setError(err.message));
+    return () => { live = false; if (made) URL.revokeObjectURL(made); };
+  }, [id]);
+
+  return (
+    <div className="card">
+      <h3>Listen to the recording</h3>
+      {error ? <div className="alert bad">{error}</div>
+        : url ? <audio controls src={url} style={{ width: "100%" }} />
+        : <p className="muted small">Loading audio…</p>}
+      <p className="small muted">This is the signal the model analysed: the first channel, converted to mono and scaled to a comfortable volume. Original loudness is not preserved.</p>
+    </div>
+  );
+}
+
 function Result({ out, saved, note, onSave }) {
   const r = out.result;
   const tone = r.level === "Healthy" ? "ok" : r.level === "Watch" ? "warn" : "bad";
@@ -87,6 +112,8 @@ function Result({ out, saved, note, onSave }) {
         <p>{r.advice}</p>
         {note && <div className="small" role="status">{note}</div>}
       </div>
+
+      <Listen id={out.analysis_id} />
 
       <div className="stats">
         <div className="card"><div className="muted small">Health index</div><div className="stat">{Math.round(r.health)}<span className="small muted"> / 100</span></div></div>

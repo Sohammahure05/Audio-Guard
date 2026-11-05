@@ -72,17 +72,27 @@ R2_HEALTHY = 0.92
 R2_WATCH = 0.88
 
 
-def r2_condition(value):
+def limits(spread=None):
+    default = (100 * (1 - R2_HEALTHY), 100 * (1 - R2_WATCH))
+    if not spread:
+        return default
+    top = max(spread)
+    return (max(default[0], 2.0 * top), max(default[1], 3.0 * top))
+
+
+def r2_condition(value, lim=None):
     if value is None:
         return "No baseline"
-    if value >= R2_HEALTHY:
-        return "Healthy"
-    if value >= R2_WATCH:
-        return "Watch"
-    return "Degraded"
+    watch, degraded = lim or limits()
+    pct = (1 - value) * 100
+    if pct <= watch:
+        return "Close to ideal"
+    if pct <= degraded:
+        return "Drifting"
+    return "Far from ideal"
 
-def pct_condition(pct):
-    return r2_condition(1 - pct / 100)
+def pct_condition(pct, lim=None):
+    return r2_condition(1 - pct / 100, lim)
 
 
 def r2_series(base_profile, profiles):
@@ -97,7 +107,8 @@ def _ylim_top(values):
     return float(min(100, max(40, np.ceil(max(values) / 10) * 10 + 10)))
 
 
-def plot_r2_trend(ax, prev_pct, new_pct):
+def plot_r2_trend(ax, prev_pct, new_pct, lim=None):
+    lim = lim or limits()
     past = list(prev_pct)
     x_new = len(past) + 1
     xs = list(range(0, len(past) + 1))
@@ -105,11 +116,11 @@ def plot_r2_trend(ax, prev_pct, new_pct):
     ax.plot(xs, ys, marker="o", color="#1565c0", label="ideal and saved readings")
     ax.plot([xs[-1], x_new], [ys[-1], new_pct], color="#1565c0", linestyle=":")
     ax.scatter([x_new], [new_pct], marker="*", s=180, color="#c62828", zorder=5, label="this reading")
-    ax.axhline(100 * (1 - R2_HEALTHY), color="orange", linestyle="--", label="watch limit")
-    ax.axhline(100 * (1 - R2_WATCH), color="red", linestyle="--", label="degraded limit")
-    ax.set_title(f"Degradation vs ideal (R2): {new_pct:.0f}% ({pct_condition(new_pct)})")
+    ax.axhline(lim[0], color="orange", linestyle="--", label="drifting limit")
+    ax.axhline(lim[1], color="red", linestyle="--", label="far-from-ideal limit")
+    ax.set_title(f"Sound drift vs ideal (R2): {new_pct:.0f}% ({pct_condition(new_pct, lim)})")
     ax.set_xlabel("Reading number since the ideal was set")
-    ax.set_ylabel("Degradation %")
+    ax.set_ylabel("Sound drift %")
     ax.set_xlim(-0.5, x_new + 0.5)
     ax.set_ylim(0, _ylim_top(ys + [new_pct]))
     ax.set_xticks(range(0, x_new + 1))
@@ -122,11 +133,11 @@ def plot_history_degradation(ax, pcts):
     xs = list(range(0, len(values) + 1))
     ys = [0.0] + values
     ax.plot(xs, ys, marker="o", color="#1565c0")
-    ax.axhline(100 * (1 - R2_HEALTHY), color="orange", linestyle="--", label="watch limit")
-    ax.axhline(100 * (1 - R2_WATCH), color="red", linestyle="--", label="degraded limit")
-    ax.set_title("Degradation vs the machine's ideal (R2), saved readings")
+    ax.axhline(100 * (1 - R2_HEALTHY), color="orange", linestyle="--", label="drifting limit")
+    ax.axhline(100 * (1 - R2_WATCH), color="red", linestyle="--", label="far-from-ideal limit")
+    ax.set_title("Sound drift vs the machine's ideal (R2), saved readings")
     ax.set_xlabel("Reading number since the ideal was set")
-    ax.set_ylabel("Degradation %")
+    ax.set_ylabel("Sound drift %")
     ax.set_xlim(-0.5, len(values) + 0.5)
     ax.set_ylim(0, _ylim_top(ys))
     ax.set_xticks(xs)
@@ -145,14 +156,14 @@ def trend_info(pcts):
     return {"direction": "Stable"}
 
 
-def degradation_alerts(prev_pct, new_pct):
+def degradation_alerts(prev_pct, new_pct, lim=None):
     series = list(prev_pct) + [new_pct]
     alerts = []
-    condition = pct_condition(new_pct)
-    if condition == "Degraded":
-        alerts.append(f"This reading is degraded: {new_pct:.0f}% away from the machine's ideal.")
-    elif condition == "Watch":
-        alerts.append(f"This reading is on watch: {new_pct:.0f}% away from the machine's ideal.")
+    condition = pct_condition(new_pct, lim)
+    if condition == "Far from ideal":
+        alerts.append(f"This reading sounds very different from the machine's ideal ({new_pct:.0f}% sound drift).")
+    elif condition == "Drifting":
+        alerts.append(f"This reading is drifting from the machine's ideal ({new_pct:.0f}% sound drift).")
     if len(series) >= 3 and series[-1] > series[-2] > series[-3] and series[-1] - series[-3] >= 5:
-        alerts.append(f"Degradation has risen over the last 3 readings: {series[-3]:.0f}% to {series[-1]:.0f}%.")
+        alerts.append(f"Sound drift has risen over the last 3 readings: {series[-3]:.0f}% to {series[-1]:.0f}%.")
     return alerts
