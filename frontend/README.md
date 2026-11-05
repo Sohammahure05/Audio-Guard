@@ -1,4 +1,4 @@
-# Machine Health frontend
+# Audio Guard frontend
 
 Start the API from the project root, then the frontend:
 

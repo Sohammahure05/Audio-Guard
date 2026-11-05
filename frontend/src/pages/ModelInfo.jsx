@@ -17,7 +17,7 @@ export default function ModelInfo() {
 
   return (
     <>
-      <header className="page-head"><div><h1>Model info</h1><p className="muted">How the model was trained and how well it performs</p></div></header>
+      {/* <header className="page-head"><div><h1>Model info</h1><p className="muted">How the model was trained and how well it performs</p></div></header> */}
 
       <div className="stats">
         <div className="card"><div className="muted small">Trained</div><div className="stat small-stat">{info.trained_at}</div></div>

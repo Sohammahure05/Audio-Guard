@@ -76,17 +76,16 @@ export default function Batch() {
           {note && <div className="small" role="status">{note}</div>}
           <div className="table-wrap">
             <table>
-              <thead><tr><th>File</th><th>Machine</th><th>Verdict</th><th>Health</th><th>Vs ideal</th><th>Inputs</th></tr></thead>
+              <thead><tr><th>File</th><th>Machine</th><th>Verdict</th><th>Health</th><th>Sound drift vs ideal</th></tr></thead>
               <tbody>
                 {rows.map((r, i) => r.error ? (
-                  <tr key={i}><td>{r.file_name}</td><td>{r.machine_code}</td><td colSpan={4}><span className="alert bad">{r.error}</span></td></tr>
+                  <tr key={i}><td>{r.file_name}</td><td>{r.machine_code}</td><td colSpan={3}><span className="alert bad">{r.error}</span></td></tr>
                 ) : (
                   <tr key={i}>
                     <td>{r.file_name}</td><td><strong>{r.machine_code}</strong></td>
                     <td>{r.status} <Badge status={r.level} /></td>
                     <td>{Math.round(r.health)} / 100</td>
                     <td className="muted">{r.degradation_pct != null ? `${r.degradation_pct.toFixed(1)}% · ${r.condition}` : "No ideal"}</td>
-                    <td>{r.reliable ? <span className="badge ok">Good</span> : <span className="badge warn">Check</span>}</td>
                   </tr>
                 ))}
               </tbody>

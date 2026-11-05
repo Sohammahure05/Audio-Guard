@@ -1,7 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Area, AreaChart, Bar, BarChart, Cell, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { analyseApi, api } from "../api.js";
+import { Area, AreaChart, Bar, BarChart, Cell, CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { analyseApi, api, historyApi } from "../api.js";
 import Badge from "../components/Badge.jsx";
 import Spectrogram from "../components/Spectrogram.jsx";
 import useLoad from "../components/useLoad.js";
@@ -101,7 +101,7 @@ function Result({ out, saved, note, onSave }) {
           <ResponsiveContainer>
             <BarChart data={r.segments_detail.map((s) => ({ ...s, label: `${s.start}–${s.end}s` }))}>
               <CartesianGrid stroke="var(--line)" vertical={false} />
-              <XAxis dataKey="label" stroke="var(--muted)" fontSize={12} />
+              <XAxis dataKey="label" padding={{ left: 12, right: 12 }} stroke="var(--muted)" fontSize={12} />
               <YAxis domain={[0, 1]} stroke="var(--muted)" fontSize={12} />
               <Tooltip formatter={(v) => v.toFixed(3)} />
               <ReferenceLine y={r.threshold} stroke="var(--bad)" strokeDasharray="5 4" />
@@ -130,13 +130,14 @@ function Result({ out, saved, note, onSave }) {
         <div className="card"><h3>Spectrogram</h3><Spectrogram data={out.spectrogram} /></div>
       </div>
 
+      <TrendCharts out={out} saved={saved} />
+
       {d ? (
         <div className="card">
           <h3>Sound drift from this machine’s ideal</h3>
           <div className="stats">
             <div><div className="muted small">Condition</div><strong>{d.condition}</strong></div>
             <div><div className="muted small">Sound drift (R²)</div><strong>{pct(d.r2_pct)}</strong></div>
-            <div><div className="muted small">Health drop vs ideal</div><strong>{pct(d.pct)} ({d.grade})</strong></div>
             <div><div className="muted small">Trend</div><strong>{d.series_trend?.direction}</strong></div>
           </div>
           <p className="small muted">This compares the shape of the sound with the ideal. It can differ from the fault verdict above, for example when the recording comes from a different machine, microphone or noise level.</p>
@@ -152,15 +153,109 @@ function Result({ out, saved, note, onSave }) {
         </div>
       )}
 
-      <div className="card">
-        <h3>Input checks {r.reliable ? <Badge status="Healthy" /> : <span className="badge warn">Check inputs</span>}</h3>
-        <table><tbody>
-          {r.checks.map((c) => (
-            <tr key={c.name}><td>{c.name}</td><td className="muted">{c.detail}</td><td><span className={`badge ${c.passed ? "ok" : "bad"}`}>{c.passed ? "Passed" : "Failed"}</span></td></tr>
-          ))}
-        </tbody></table>
-        <p className="small muted">These checks show whether the recording suits the model. They do not say the verdict is correct.</p>
+    </>
+  );
+}
+
+function TrendCharts({ out, saved }) {
+  const [h, setH] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    historyApi.get(out.machine.id, true).then((x) => alive && setH(x)).catch(() => alive && setH({ chart: [] }));
+    return () => { alive = false; };
+  }, [out.analysis_id, saved]);
+
+  if (!h) return null;
+  const r = out.result;
+  const d = out.degradation;
+  const past = saved ? h.chart.slice(0, -1) : h.chart;
+  const n = past.length + 1;
+
+  const health = [...past.map((p) => ({ n: p.n, saved: p.health })), { n, current: r.health }];
+  if (past.length) {
+    health[past.length - 1].bridge = past[past.length - 1].health;
+    health[past.length].bridge = r.health;
+  }
+
+  const reference = out.ideal ? out.ideal.profile : out.comparison?.baseline_profile;
+  const profile = reference ? out.profile_axis.map((hz, i) => ({ hz, reference: reference[i], reading: r.profile[i] })) : null;
+
+  const watch = d?.watch_pct ?? 8;
+  const degraded = d?.degraded_pct ?? 12;
+  const drift = d ? [{ n: 0, label: "ideal", saved: 0 }, ...past.map((p) => ({ n: p.n, label: String(p.n), saved: p.degradation })), { n, label: String(n), current: d.r2_pct }] : null;
+  if (drift) {
+    drift[drift.length - 2].bridge = drift[drift.length - 2].saved;
+    drift[drift.length - 1].bridge = d.r2_pct;
+  }
+
+  return (
+    <>
+      <div className="two">
+        <div className="card">
+          <h3>Health index over time</h3>
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer>
+              <LineChart data={health}>
+                <CartesianGrid stroke="var(--line)" vertical={false} />
+                <XAxis dataKey="n" allowDecimals={false} padding={{ left: 12, right: 12 }} stroke="var(--muted)" fontSize={12} />
+                <YAxis domain={[0, 100]} stroke="var(--muted)" fontSize={12} />
+                <Tooltip formatter={(v) => v.toFixed(0)} />
+                <ReferenceLine y={50} stroke="var(--muted)" strokeDasharray="5 4" />
+                <Legend />
+                <Line dataKey="bridge" stroke="var(--accent)" strokeDasharray="3 4" strokeWidth={2} dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls isAnimationActive={false} />
+                <Line name="saved readings" dataKey="saved" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3, fill: "var(--accent)" }} isAnimationActive={false} />
+                <Line name="this reading" dataKey="current" stroke="var(--bad)" dot={{ r: 5, fill: "var(--bad)" }} activeDot={{ r: 6 }} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="small muted">Dashed line: 50 is the decision boundary.{past.length === 0 ? " No earlier readings are saved for this machine yet." : ""}</p>
+        </div>
+
+        {drift ? (
+          <div className="card">
+            <h3>Sound drift from ideal</h3>
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer>
+                <LineChart data={drift}>
+                  <CartesianGrid stroke="var(--line)" vertical={false} />
+                  <XAxis dataKey="label" padding={{ left: 12, right: 12 }} stroke="var(--muted)" fontSize={12} />
+                  <YAxis domain={[0, (max) => Math.max(40, Math.ceil(max / 10) * 10 + 10)]} stroke="var(--muted)" fontSize={12} />
+                  <Tooltip formatter={(v) => `${v.toFixed(1)}%`} />
+                  <ReferenceLine y={watch} stroke="var(--warn)" strokeDasharray="5 4" />
+                  <ReferenceLine y={degraded} stroke="var(--bad)" strokeDasharray="5 4" />
+                  <Legend />
+                  <Line dataKey="bridge" stroke="var(--accent)" strokeDasharray="3 4" strokeWidth={2} dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls isAnimationActive={false} />
+                <Line name="saved readings" dataKey="saved" stroke="var(--accent)" strokeWidth={2} dot={{ r: 3, fill: "var(--accent)" }} connectNulls isAnimationActive={false} />
+                  <Line name="this reading" dataKey="current" stroke="var(--bad)" dot={{ r: 5, fill: "var(--bad)" }} isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="small muted">Orange line: drifting limit ({watch.toFixed(0)}%). Red line: far-from-ideal limit ({degraded.toFixed(0)}%).{d.natural_spread != null ? ` Limits are set from how much this machine’s own ideal clips vary (${d.natural_spread.toFixed(0)}%).` : ""}</p>
+          </div>
+        ) : (
+          <div className="card"><h3>Sound drift from ideal</h3><p className="muted">Set an ideal for this machine to see this chart.</p></div>
+        )}
       </div>
+
+      {profile && (
+        <div className="card">
+          <h3>Spectral profile: this reading vs {out.ideal ? "machine ideal" : "earlier readings"}</h3>
+          <div style={{ height: 240 }}>
+            <ResponsiveContainer>
+              <LineChart data={profile}>
+                <CartesianGrid stroke="var(--line)" vertical={false} />
+                <XAxis dataKey="hz" stroke="var(--muted)" fontSize={12} tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v)} interval={4} />
+                <YAxis stroke="var(--muted)" fontSize={12} />
+                <Tooltip formatter={(v) => v.toFixed(1)} labelFormatter={(v) => `${v} Hz`} />
+                <Legend />
+                <Line name={out.ideal ? "machine ideal" : "average of earlier readings"} dataKey="reference" stroke="var(--accent)" strokeWidth={2} dot={false} isAnimationActive={false} />
+                <Line name="this reading" dataKey="reading" stroke="var(--bad)" strokeWidth={2} dot={false} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="small muted">Sound level (dB, normalised) across pitch. Bigger gaps between the lines mean a bigger change in sound character.</p>
+        </div>
+      )}
     </>
   );
 }

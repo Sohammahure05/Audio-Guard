@@ -37,7 +37,7 @@ export default function Login() {
   return (
     <div className="login">
       <section className="login-hero">
-        <div className="brand"><span className="brand-mark" /><span>Machine Health</span></div>
+        <div className="brand"><span className="brand-mark" /><span>Audio Guard</span></div>
         <h1>Hear problems before they stop production.</h1>
         <p>Upload a machine recording, get a health verdict, and track every machine over time.</p>
       </section>

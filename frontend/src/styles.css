@@ -81,3 +81,13 @@ ul { margin: 0; padding-left: 20px; } li { margin: 4px 0; }
 .alert.warn { background: var(--warn-bg); color: var(--warn); }
 .stat.small-stat { font-size: 22px; padding-top: 6px; }
 label.check { flex-direction: row; align-items: center; gap: 8px; align-self: end; padding-bottom: 10px; } label.check input { width: auto; }
+.skip { position: absolute; left: -999px; top: 8px; background: var(--accent); color: #fff; padding: 8px 12px; border-radius: 8px; z-index: 10; }
+.skip:focus { left: 8px; }
+.form-grid h3 { margin: 0; }
+tbody tr:hover td { background: var(--bg); }
+.btn, select, input[type="file"] { min-height: 38px; }
+.btn.ghost { min-height: 32px; }
+.content > * { min-width: 0; }
+.card h3 + p { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+@media print { .sidebar, .btn { display: none; } .shell { display: block; } }

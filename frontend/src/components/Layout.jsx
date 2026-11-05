@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth.jsx";
 
 const links = [
@@ -10,13 +10,19 @@ const links = [
   ["/ideal", "Ideal"],
   ["/history", "History"],
   ["/reports", "Reports"],
-  ["/model", "Model info"],
+  // ["/model", "Model info"],
 ];
 
 export default function Layout() {
   const { auth, signOut } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [theme, setTheme] = useState(localStorage.getItem("mh-theme") || "light");
+
+  useEffect(() => {
+    const page = links.find(([to]) => to === pathname)?.[1];
+    document.title = page ? `${page} · Audio Guard` : "Audio Guard";
+  }, [pathname]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -25,10 +31,11 @@ export default function Layout() {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
+      <a className="skip" href="#main">Skip to content</a>
+      <aside className="sidebar" aria-label="Main navigation">
         <div className="brand">
           <span className="brand-mark" />
-          <span>Machine Health</span>
+          <span>Audio Guard</span>
         </div>
         <nav>
           {links.map(([to, label]) => (
@@ -55,7 +62,7 @@ export default function Layout() {
           </div>
         </div>
       </aside>
-      <main className="content">
+      <main className="content" id="main">
         <Outlet />
       </main>
     </div>
